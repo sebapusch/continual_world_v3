@@ -1,0 +1,15 @@
+[project]
+name = "continual-world-v3"
+version = "0.1.0"
+description = "Continual World task sequences updated for Meta-World v3"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flax>=0.12.8",
+    "metaworld>=3.1.1",
+    # Meta-World imports Gymnasium's MuJoCo renderer, but currently depends on
+    # base Gymnasium rather than the `mujoco` extra that supplies this package.
+    "packaging>=23.0",
+    "tensorflow-probability>=0.25.0",
+    "tqdm>=4.70.0",
+]
