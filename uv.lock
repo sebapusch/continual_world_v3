@@ -78,6 +78,7 @@ dependencies = [
     { name = "flax" },
     { name = "gym" },
     { name = "metaworld" },
+    { name = "numpy" },
     { name = "packaging" },
     { name = "tqdm" },
 ]
@@ -88,6 +89,7 @@ requires-dist = [
     { name = "flax", specifier = ">=0.12.8" },
     { name = "gym", specifier = ">=0.26.2" },
     { name = "metaworld", specifier = ">=3.1.1" },
+    { name = "numpy", specifier = ">=2.5.1" },
     { name = "packaging", specifier = ">=23.0" },
     { name = "tqdm", specifier = ">=4.70.0" },
 ]

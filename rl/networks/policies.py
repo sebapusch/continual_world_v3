@@ -138,8 +138,11 @@ def _sample_actions(
         temperature: float = 1.0,
         distribution: str = 'log_prob') -> Tuple[PRNGKey, jnp.ndarray]:
     if distribution == 'det':
-        return rng, actor_apply_fn({'params': actor_params}, observations,
-                                   temperature)
+        dist = actor_apply_fn({'params': actor_params}, observations)
+        # Transformed.mode() is undefined for tanh because its Jacobian is not
+        # constant. SAC evaluation conventionally uses tanh(base_mean).
+        actions = dist.bijector.forward(dist.distribution.mode())
+        return rng, actions
     else:
         dist = actor_apply_fn({'params': actor_params}, observations,
                               temperature)

@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import argparse
 
-import numpy as np
 import jax.numpy as jnp
-from tqdm import tqdm
+import numpy as np
 
+from common.eval import TerminalLogger, evaluate
 from continualworld import TASK_SEQUENCES, get_cl_env
 from rl.algorithms.sac import SACLearner
 from rl.datasets.replay_buffer import ReplayBuffer
+
+
+def _should_train(
+    timestep: int, training_starts: int, gradient_update_interval: int
+) -> bool:
+    """Return whether a gradient-update block is due at this timestep."""
+    return (
+        timestep >= training_starts
+        and (timestep - training_starts) % gradient_update_interval == 0
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--buffer-size', type=int, default=1_000_000)
     parser.add_argument('--training-starts', type=int, default=1000)
     parser.add_argument('--gradient-update-interval', type=int, default=1000)
+    parser.add_argument('--eval-interval', type=int, default=10_000)
     parser.add_argument('--gradient-steps', type=int, default=1000)
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--total-timesteps', type=int, default=100_000)
@@ -40,10 +51,10 @@ def main() -> None:
         seed=args.seed,
     )
     env.action_space.seed(args.seed)
+    env.observation_space.seed(args.seed)
 
     num_episodes = 0
     num_success = 0
-    previous_task_index = 0
     current_timestep = 0
     success = False
 
@@ -53,54 +64,64 @@ def main() -> None:
         actions=jnp.array(env.action_space.sample()[np.newaxis]),
     )
 
-    replay_buffer = ReplayBuffer(env.observation_space, env.action_space, args.buffer_size)
+    loggers = [TerminalLogger()]
 
-    progress_bar = tqdm(total=args.total_timesteps)
+    replay_buffer = ReplayBuffer(
+        env.observation_space,  # type: ignore[arg-type]
+        env.action_space,       # type: ignore[arg-type]
+        args.buffer_size,
+    )
 
     try:
-        while current_timestep <= args.total_timesteps:
-            observation, reset_info = env.reset(seed=args.seed)
+        observation, _ = env.reset(seed=args.seed)
+        while current_timestep < args.total_timesteps and not env.exhausted:
+            if current_timestep < args.training_starts:
+                action = env.action_space.sample()
+            else:
+                action = np.asarray(sac.sample_actions(observation))
 
-            if reset_info["sequence_index"] != previous_task_index:
-                break
+            next_observation, reward, terminated, truncated, info = env.step(action)
+            mask = 0.0 if terminated else 1.0
+            done = terminated or truncated
+            replay_buffer.insert(
+                observation,
+                action,
+                reward,
+                mask,
+                float(done),
+                next_observation,
+            )
 
-            collected_timesteps = 0
-            not_started = collected_timesteps < args.training_starts
-            while (not_started or collected_timesteps < args.gradient_update_interval
-                   and current_timestep + collected_timesteps < args.total_timesteps):
+            success = success or bool(info["success"])
+            current_timestep += 1
+            for logger in loggers:
+                logger.increase_timestep()
 
-                action = env.action_space.sample() if not_started else np.array(sac.sample_actions(observation))
-
-                next_observation, reward, terminated, truncated, info = env.step(action)
-                mask = 0.0 if terminated else 1.0
-                done = float(terminated or truncated)
-
-                replay_buffer.insert(observation, action, reward, mask, done, next_observation)
-
-                success = success or info['success']
-
-                if done:
-                    observation, reset_info = env.reset(seed=args.seed)
-
-                    num_episodes += 1
-                    if success:
-                        num_success += 1
-
-                    success = False
-                else:
-                    observation = next_observation
-
-                collected_timesteps += 1
-
-            current_timestep += collected_timesteps
-            progress_bar.update(collected_timesteps)
-
-            if (current_timestep - args.training_starts) % args.gradient_update_interval == 0:
-                for i in range(args.gradient_steps):
+            if _should_train(
+                current_timestep,
+                args.training_starts,
+                args.gradient_update_interval,
+            ):
+                print(f'training ({current_timestep}/{args.total_timesteps})')
+                for _ in range(args.gradient_steps):
                     sac.update(replay_buffer.sample(batch_size=args.batch_size))
+
+            if current_timestep % args.eval_interval == 0 and not env.exhausted:
+                print("evaluating")
+                evaluate(sac, env, loggers, args.seed + 42, "current")
+
+            if done:
+                num_episodes += 1
+                if success:
+                    num_success += 1
+                success = False
+
+                if not env.exhausted:
+                    observation, _ = env.reset()
+            else:
+                observation = next_observation
     finally:
         env.close()
-
 
     print(
         f"finished {args.sequence}: {env.total_steps} transitions, "

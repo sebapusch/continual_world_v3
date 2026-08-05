@@ -1,4 +1,5 @@
 import functools
+import warnings
 from typing import Optional, Sequence, Tuple, Literal
 
 import jax
@@ -10,6 +11,25 @@ from flax import linen as nn
 from rl.datasets.dataset import Batch
 from rl.networks import critic_net, policies
 from rl.networks.common import InfoDict, Model, Params, PRNGKey
+
+
+def _tree_is_finite(tree) -> bool:
+    """Return whether every numeric leaf in a JAX pytree is finite."""
+    return all(
+        bool(np.all(np.isfinite(np.asarray(leaf))))
+        for leaf in jax.tree_util.tree_leaves(tree)
+    )
+
+
+def _optimizer(
+        learning_rate: float,
+        max_grad_norm: Optional[float]
+) -> optax.GradientTransformation:
+    transforms = []
+    if max_grad_norm is not None:
+        transforms.append(optax.clip_by_global_norm(max_grad_norm))
+    transforms.append(optax.adam(learning_rate=learning_rate))
+    return optax.chain(*transforms)
 
 
 class Temperature(nn.Module):
@@ -145,7 +165,8 @@ class SACLearner(object):
                  backup_entropy: bool = True,
                  init_temperature: float = 1.0,
                  init_mean: Optional[np.ndarray] = None,
-                 policy_final_fc_init_scale: float = 1.0):
+                 policy_final_fc_init_scale: float = 1.0,
+                 max_grad_norm: Optional[float] = 10.0):
         """
         An implementation of the version of Soft-Actor-Critic described in https://arxiv.org/abs/1812.05905
         """
@@ -162,6 +183,8 @@ class SACLearner(object):
         self.tau = tau
         self.target_update_period = target_update_period
         self.discount = discount
+        if max_grad_norm is not None and max_grad_norm <= 0:
+            raise ValueError("max_grad_norm must be positive or None")
 
         rng = jax.random.PRNGKey(seed)
         rng, actor_key, critic_key, temp_key = jax.random.split(rng, 4)
@@ -172,18 +195,18 @@ class SACLearner(object):
             final_fc_init_scale=policy_final_fc_init_scale)
         actor = Model.create(actor_def,
                              inputs=[actor_key, observations],
-                             tx=optax.adam(learning_rate=actor_lr))
+                             tx=_optimizer(actor_lr, max_grad_norm))
 
         critic_def = critic_net.DoubleCritic(hidden_dims)
         critic = Model.create(critic_def,
                               inputs=[critic_key, observations, actions],
-                              tx=optax.adam(learning_rate=critic_lr))
+                              tx=_optimizer(critic_lr, max_grad_norm))
         target_critic = Model.create(
             critic_def, inputs=[critic_key, observations, actions])
 
         temp = Model.create(Temperature(init_temperature),
                             inputs=[temp_key],
-                            tx=optax.adam(learning_rate=temp_lr))
+                            tx=_optimizer(temp_lr, max_grad_norm))
 
         self.actor = actor
         self.critic = critic
@@ -192,19 +215,43 @@ class SACLearner(object):
         self.rng = rng
 
         self.step = 1
+        self.skipped_updates = 0
+        self.nonfinite_action_count = 0
+        self._warned_about_nonfinite_action = False
+        self._warned_about_skipped_update = False
 
     def sample_actions(self,
                        observations: np.ndarray,
-                       temperature: float = 1.0) -> jnp.ndarray:
+                       temperature: float = 1.0,
+                       deterministic: bool = False) -> jnp.ndarray:
         rng, actions = policies.sample_actions(self.rng, self.actor.apply_fn,
                                                self.actor.params, observations,
-                                               temperature)
+                                               temperature,
+                                               distribution=(
+                                                   'det' if deterministic
+                                                   else 'log_prob'
+                                               ))
         self.rng = rng
 
         actions = np.asarray(actions)
+        if not np.all(np.isfinite(actions)):
+            self.nonfinite_action_count += 1
+            if not self._warned_about_nonfinite_action:
+                warnings.warn(
+                    "SAC produced a non-finite action; replacing it with a "
+                    "bounded fallback action. Check skipped_updates and the "
+                    "training losses.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._warned_about_nonfinite_action = True
+            actions = np.nan_to_num(actions, nan=0.0, posinf=1.0, neginf=-1.0)
         return np.clip(actions, -1, 1)
 
     def update(self, batch: Batch) -> InfoDict:
+        if not _tree_is_finite(batch):
+            return self._skip_update("the replay batch contains non-finite values")
+
         self.step += 1
 
         new_rng, new_actor, new_critic, new_target_critic, new_temp, info = _update_jit(
@@ -213,9 +260,36 @@ class SACLearner(object):
             self.backup_entropy, self.step % self.target_update_period == 0)
 
         self.rng = new_rng
+        candidate_state = (
+            new_actor.params,
+            new_actor.opt_state,
+            new_critic.params,
+            new_critic.opt_state,
+            new_target_critic.params,
+            new_temp.params,
+            new_temp.opt_state,
+            info,
+        )
+        if not _tree_is_finite(candidate_state):
+            self.step -= 1
+            return self._skip_update("the optimizer produced non-finite state")
+
         self.actor = new_actor
         self.critic = new_critic
         self.target_critic = new_target_critic
         self.temp = new_temp
 
-        return info
+        return {**info, 'update_skipped': 0.0}
+
+    def _skip_update(self, reason: str) -> InfoDict:
+        """Keep the last finite learner state when an update is unsafe."""
+        self.skipped_updates += 1
+        if not self._warned_about_skipped_update:
+            warnings.warn(
+                f"Skipping SAC update because {reason}. The last finite "
+                "learner state will be retained.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            self._warned_about_skipped_update = True
+        return {'update_skipped': 1.0}

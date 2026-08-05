@@ -10,6 +10,7 @@ import metaworld
 import numpy as np
 from gymnasium import spaces
 from metaworld.types import Task
+
 from continualworld.tasks import resolve_sequence
 
 META_WORLD_TIME_HORIZON = 200
@@ -39,6 +40,29 @@ class _SequenceOneHotWrapper(gym.ObservationWrapper):
         return np.concatenate([observation, self._one_hot])
 
 
+class _TaskSamplerWrapper(gym.Wrapper):
+    """Select a Meta-World goal before each evaluation episode."""
+
+    def __init__(
+        self, env: gym.Env, tasks: Sequence[Task], rng: np.random.Generator
+    ) -> None:
+        super().__init__(env)
+        self._tasks = tasks
+        self._rng = rng
+
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        if seed is not None:
+            self._rng = np.random.default_rng(seed)
+        task_index = int(self._rng.integers(len(self._tasks)))
+        self.env.unwrapped.set_task(self._tasks[task_index])
+        return self.env.reset(seed=seed, options=options)
+
+
 class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
     """Run a fixed sequence of Meta-World v3 tasks.
 
@@ -47,6 +71,11 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
     appended to Meta-World's observation. At a sequence boundary ``step``
     returns ``truncated=True`` and the following ``reset`` starts the next
     task. The environment is exhausted after the final task budget.
+
+    ``test_envs`` contains independently resettable evaluation environments
+    in sequence order. Indexing it selects a particular sequence position;
+    ``current_test_env`` (or ``test_env``) selects the active position. Their
+    observations use the same sequence-position one-hot encoding as training.
 
     This class intentionally contains no learning algorithm. It is a small
     benchmark/environment layer that can be used with any Gymnasium agent.
@@ -86,14 +115,21 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
         # 50 Meta-World goals when it revisits a task in its second half.
         seed_sequence = np.random.SeedSequence(seed)
         unique_names = tuple(dict.fromkeys(self.tasks))
-        child_seeds = seed_sequence.spawn(len(unique_names) + self.num_tasks)
+        child_seeds = seed_sequence.spawn(len(unique_names) + 2 * self.num_tasks)
         self._benchmarks: dict[str, metaworld.MT1] = {}
         for index, name in enumerate(unique_names):
             benchmark_seed = int(child_seeds[index].generate_state(1)[0])
             self._benchmarks[name] = metaworld.MT1(name, seed=benchmark_seed)
 
+        training_rng_seeds = child_seeds[
+            len(unique_names) : len(unique_names) + self.num_tasks
+        ]
         self._task_rngs = [
-            np.random.default_rng(child) for child in child_seeds[len(unique_names) :]
+            np.random.default_rng(child) for child in training_rng_seeds
+        ]
+        self._test_task_rngs = [
+            np.random.default_rng(child)
+            for child in child_seeds[len(unique_names) + self.num_tasks :]
         ]
         self._active_env: gym.Env | None = None
         self._active_raw_env: gym.Env | None = None
@@ -128,6 +164,9 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
             ),
             dtype=base_space.dtype,
         )
+        self.test_envs: list[gym.Env] = [
+            self._build_test_env(index) for index in range(self.num_tasks)
+        ]
 
     @property
     def current_task_index(self) -> int | None:
@@ -139,6 +178,17 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
         """Current Meta-World environment name, or ``None`` when exhausted."""
         index = self.current_task_index
         return self.tasks[index] if index is not None else None
+
+    @property
+    def current_test_env(self) -> gym.Env | None:
+        """Evaluation environment matching the current sequence position."""
+        index = self.current_task_index
+        return self.test_envs[index] if index is not None else None
+
+    @property
+    def test_env(self) -> gym.Env | None:
+        """Short alias for :attr:`current_test_env`."""
+        return self.current_test_env
 
     @property
     def total_steps(self) -> int:
@@ -165,6 +215,21 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
         self._active_raw_env = raw_env
         self._active_env = wrapped
         return wrapped
+
+    def _build_test_env(self, index: int) -> gym.Env:
+        """Build an independently resettable environment for one sequence entry."""
+        name = self.tasks[index]
+        benchmark = self._benchmarks[name]
+        raw_env = benchmark.train_classes[name](render_mode=self.render_mode)
+        wrapped: gym.Env = _TaskSamplerWrapper(
+            raw_env, benchmark.train_tasks, self._test_task_rngs[index]
+        )
+        wrapped = _SequenceOneHotWrapper(
+            wrapped, task_idx=index, num_tasks=self.num_tasks
+        )
+        return gym.wrappers.TimeLimit(
+            wrapped, max_episode_steps=self.episode_horizon
+        )
 
     def _select_goal(self) -> Task:
         index = self.current_task_index
@@ -259,6 +324,8 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
     def close(self) -> None:
         if self._active_env is not None:
             self._active_env.close()
+        for env in self.test_envs:
+            env.close()
         self._active_env = None
         self._active_raw_env = None
 

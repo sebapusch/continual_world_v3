@@ -42,6 +42,32 @@ class ContinualWorldEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_ordered_test_envs_share_training_one_hot_encodings(self) -> None:
+        env = get_cl_env(
+            ["push-v3", "window-close-v3"],
+            steps_per_task=1,
+            episode_horizon=10,
+            seed=7,
+        )
+        try:
+            self.assertEqual(len(env.test_envs), 2)
+            self.assertIs(env.current_test_env, env.test_envs[0])
+            self.assertIs(env.test_env, env.test_envs[0])
+
+            train_observation, _ = env.reset(seed=7)
+            first_test_observation, _ = env.test_envs[0].reset(seed=7)
+            second_test_observation, _ = env.test_envs[1].reset(seed=7)
+            np.testing.assert_array_equal(
+                first_test_observation[-2:], train_observation[-2:]
+            )
+            np.testing.assert_array_equal(second_test_observation[-2:], [0.0, 1.0])
+
+            env.step(env.action_space.sample())
+            self.assertIs(env.current_test_env, env.test_envs[1])
+            self.assertIs(env.test_env, env.test_envs[1])
+        finally:
+            env.close()
+
 
 if __name__ == "__main__":
     unittest.main()
