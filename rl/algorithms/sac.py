@@ -86,7 +86,7 @@ def update_critic(key: PRNGKey, actor: Model, critic: Model, target_critic: Mode
 
 
 def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
-    new_target_params = jax.tree_multimap(
+    new_target_params = jax.tree_util.tree_map(
         lambda p, tp: p * tau + tp * (1 - tau), critic.params,
         target_critic.params)
 

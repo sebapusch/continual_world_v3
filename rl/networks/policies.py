@@ -1,14 +1,11 @@
 import functools
 from typing import Any, Callable, Optional, Sequence, Tuple
 
+import distrax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-from tensorflow_probability.substrates import jax as tfp
-
-tfd = tfp.distributions
-tfb = tfp.bijectors
 
 from rl.networks.common import MLP, Params, PRNGKey, default_init
 
@@ -51,7 +48,7 @@ class NormalTanhPolicy(nn.Module):
     def __call__(self,
                  observations: jnp.ndarray,
                  temperature: float = 1.0,
-                 training: bool = False) -> tfd.Distribution:
+                 training: bool = False) -> distrax.Distribution:
         outputs = MLP(self.hidden_dims,
                       activate_final=True,
                       dropout_rate=self.dropout_rate)(observations,
@@ -78,12 +75,12 @@ class NormalTanhPolicy(nn.Module):
         if not self.tanh_squash_distribution:
             means = nn.tanh(means)
 
-        base_dist = tfd.MultivariateNormalDiag(loc=means,
-                                               scale_diag=jnp.exp(log_stds) *
-                                               temperature)
+        base_dist = distrax.MultivariateNormalDiag(
+            loc=means, scale_diag=jnp.exp(log_stds) * temperature)
         if self.tanh_squash_distribution:
-            return tfd.TransformedDistribution(distribution=base_dist,
-                                               bijector=tfb.Tanh())
+            return distrax.Transformed(distribution=base_dist,
+                                       bijector=distrax.Block(
+                                           distrax.Tanh(), ndims=1))
         else:
             return base_dist
 
@@ -98,7 +95,7 @@ class NormalTanhMixturePolicy(nn.Module):
     def __call__(self,
                  observations: jnp.ndarray,
                  temperature: float = 1.0,
-                 training: bool = False) -> tfd.Distribution:
+                 training: bool = False) -> distrax.Distribution:
         outputs = MLP(self.hidden_dims,
                       activate_final=True,
                       dropout_rate=self.dropout_rate)(observations,
@@ -119,18 +116,17 @@ class NormalTanhMixturePolicy(nn.Module):
 
         log_stds = jnp.clip(log_stds, LOG_STD_MIN, LOG_STD_MAX)
 
-        components_distribution = tfd.Normal(loc=mu,
-                                             scale=jnp.exp(log_stds) *
-                                             temperature)
+        components_distribution = distrax.Normal(
+            loc=mu, scale=jnp.exp(log_stds) * temperature)
 
-        base_dist = tfd.MixtureSameFamily(
-            mixture_distribution=tfd.Categorical(logits=logits),
+        base_dist = distrax.MixtureSameFamily(
+            mixture_distribution=distrax.Categorical(logits=logits),
             components_distribution=components_distribution)
 
-        dist = tfd.TransformedDistribution(distribution=base_dist,
-                                           bijector=tfb.Tanh())
+        dist = distrax.Transformed(distribution=base_dist,
+                                   bijector=distrax.Tanh())
 
-        return tfd.Independent(dist, 1)
+        return distrax.Independent(dist, reinterpreted_batch_ndims=1)
 
 
 @functools.partial(jax.jit, static_argnames=('actor_apply_fn', 'distribution'))
