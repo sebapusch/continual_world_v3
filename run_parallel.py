@@ -18,7 +18,7 @@ def evaluator(cpu_ids: list[int], queue: mp.Queue):
 def main(
         eval_cpu_frac: float,
 ):
-    assert 0.0 > eval_cpu_frac > 1.0, "Invalid fraction of CPUs to use for evaluation"
+    assert 0.0 < eval_cpu_frac < 1.0, "Invalid fraction of CPUs to use for evaluation"
 
     available_cpus = sorted(os.sched_getaffinity(0))
 
