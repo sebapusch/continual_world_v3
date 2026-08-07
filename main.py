@@ -28,16 +28,19 @@ def parse_args() -> argparse.Namespace:
         description="Run a random policy over a Continual World v3 task sequence."
     )
     parser.add_argument("--sequence", choices=TASK_SEQUENCES, default="CW10")
-    parser.add_argument("--steps-per-task", type=int, default=100_000)
+    parser.add_argument("--steps-per-task", type=int, default=500_000)
     parser.add_argument("--episode-horizon", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--buffer-size', type=int, default=1_000_000)
-    parser.add_argument('--training-starts', type=int, default=1000)
+    parser.add_argument('--training-starts', type=int, default=10_000)
     parser.add_argument('--gradient-update-interval', type=int, default=1000)
     parser.add_argument('--eval-interval', type=int, default=10_000)
     parser.add_argument('--gradient-steps', type=int, default=1000)
     parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--total-timesteps', type=int, default=100_000)
+    parser.add_argument('--total-timesteps', type=int, default=500_000)
+
+    parser.add_argument('--actor-lr', type=float, default=1e-3)
+    parser.add_argument('--critic-lr', type=float, default=1e-3)
 
     return parser.parse_args()
 
@@ -59,9 +62,13 @@ def main() -> None:
     success = False
 
     sac = SACLearner(
+        actor_lr=args.actor_lr,
+        critic_lr=args.critic_lr,
         seed=args.seed,
         observations=jnp.array(env.observation_space.sample()[np.newaxis]),
         actions=jnp.array(env.action_space.sample()[np.newaxis]),
+        hidden_dims=[256, 256, 256, 256],
+        tau=0.089,
     )
 
     loggers = [TerminalLogger()]
