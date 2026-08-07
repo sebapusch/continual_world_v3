@@ -108,5 +108,6 @@ def evaluate(
             logger.log(metric=f'eval/{env_names[i]}/avg_episodic_return', value=episodic_returns.mean())
             logger.log(metric=f'eval/{env_names[i]}/success_rate', value=num_success / num_episodes)
 
-
+    for logger in loggers:
+        logger.flush()
 

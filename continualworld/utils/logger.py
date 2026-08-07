@@ -1,3 +1,4 @@
+import sys
 from abc import abstractmethod, ABC
 
 class Logger(ABC):
@@ -13,6 +14,9 @@ class Logger(ABC):
     @abstractmethod
     def log(self, metric: str, value: float) -> None:
         ...
+
+    def flush(self) -> None:
+        sys.stdout.flush()
 
 
 class TerminalLogger(Logger):
