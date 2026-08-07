@@ -15,4 +15,5 @@ dependencies = [
     "numpy>=2.5.1",
     "packaging>=23.0",
     "tqdm>=4.70.0",
+    "wandb>=0.21.0",
 ]

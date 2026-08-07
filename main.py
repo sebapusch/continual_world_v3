@@ -12,7 +12,7 @@ import numpy as np
 from continualworld.interproc.interproc_evaluator import InterProcEvaluator
 from continualworld import TASK_SEQUENCES, get_cl_env, ContinualWorldEnv
 from continualworld.utils.eval import Evaluator, StandardEvaluator
-from continualworld.utils.logger import Logger, TerminalLogger
+from continualworld.utils.logger import Logger, TerminalLogger, WandbLogger
 from rl.algorithms.sac import SACLearner
 from rl.datasets.replay_buffer import ReplayBuffer
 
@@ -55,6 +55,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--critic-lr', type=float, default=1e-3)
 
     parser.add_argument('--eval-cpu-frac', type=float, default=None)
+    parser.add_argument('--wandb-project', type=str, default=None)
+    parser.add_argument('--wandb-entity', type=str, default=None)
+    parser.add_argument('--wandb-name', type=str, default=None)
 
     return parser.parse_args()
 
@@ -124,6 +127,13 @@ def main() -> None:
     )
 
     loggers = [TerminalLogger()]
+    if args.wandb_project is not None:
+        loggers.append(WandbLogger(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_name,
+            config=vars(args),
+        ))
 
     replay_buffer = ReplayBuffer(
         env.observation_space,  # type: ignore[arg-type]
@@ -192,6 +202,9 @@ def main() -> None:
             else:
                 observation = next_observation
     finally:
+        evaluator.close()
+        for logger in loggers:
+            logger.close()
         env.close()
 
     print(

@@ -3,12 +3,11 @@ import sys
 import multiprocess as mp
 import os
 import time
-
-from logging import Logger
 from typing import Literal
 
 from continualworld import ContinualWorldEnv
 from continualworld.utils.eval import Evaluator, evaluate
+from continualworld.utils.logger import Logger
 from rl.algorithms.sac import SACLearner
 
 
@@ -27,7 +26,11 @@ def eval_process(
 
     try:
         while True:
-            timestep, agent = queue.get()
+            message = queue.get()
+            if message is None:
+                break
+
+            timestep, agent = message
             assert isinstance(agent, SACLearner), f'Received invalid agent type {type(agent)}, expected {SACLearner}'
             assert isinstance(timestep, int), f'Received invalid timestep type {type(timestep)}, expected int'
 
@@ -46,6 +49,9 @@ def eval_process(
 
     except KeyboardInterrupt:
         print('Received keyboard interrupt, stopping evaluation process')
+    finally:
+        for logger in loggers:
+            logger.close()
 
 
 class InterProcEvaluator(Evaluator):
@@ -69,7 +75,6 @@ class InterProcEvaluator(Evaluator):
         )
         self.eval_proc.start()
 
-
     def evaluate(
             self,
             timestep: int,
@@ -77,4 +82,7 @@ class InterProcEvaluator(Evaluator):
     ):
         self.queue.put((timestep, agent))
 
-
+    def close(self) -> None:
+        self.queue.put(None)
+        self.eval_proc.join()
+        self.queue.close()

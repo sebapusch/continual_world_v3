@@ -17,6 +17,10 @@ class Evaluator(ABC):
     ):
         ...
 
+    def close(self) -> None:
+        pass
+
+
 class StandardEvaluator(Evaluator):
     def __init__(
             self,
@@ -110,4 +114,3 @@ def evaluate(
 
     for logger in loggers:
         logger.flush()
-
