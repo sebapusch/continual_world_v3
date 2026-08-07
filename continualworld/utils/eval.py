@@ -1,30 +1,55 @@
-from abc import abstractmethod, ABC
+from abc import ABC, abstractmethod
 from typing import Literal
 
 import numpy as np
 
+from continualworld.utils.logger import Logger
 from continualworld import ContinualWorldEnv
 from rl.algorithms.sac import SACLearner
 
 
-class Logger(ABC):
-    def __init__(self) -> None:
-        self._timestep: int = 0
-
-    def increase_timestep(self) -> None:
-        self._timestep += 1
-
+class Evaluator(ABC):
     @abstractmethod
-    def log(self, metric: str, value: float) -> None:
+    def evaluate(
+            self,
+            timestep: int,
+            agent: SACLearner,
+    ):
         ...
 
+class StandardEvaluator(Evaluator):
+    def __init__(
+            self,
+            env: ContinualWorldEnv,
+            loggers: list[Logger],
+            seed: int,
+            mode: Literal['all', 'current', 'back'] = 'all',
+            num_episodes: int = 15,
+    ) -> None:
+        self.env = env
+        self.loggers = loggers
+        self.seed = seed
+        self.mode = mode
+        self.num_episodes = num_episodes
 
-class TerminalLogger(Logger):
-    def log(self, metric: str, value: float) -> None:
-        print(f'[{self._timestep}] {metric}: {value:.2f}')
+    def evaluate(
+            self,
+            timestep: int,
+            agent: SACLearner,
+    ):
+        evaluate(
+            timestep,
+            agent,
+            self.env,
+            self.loggers,
+            self.seed,
+            self.mode,          # type: ignore
+            self.num_episodes
+        )
 
 
 def evaluate(
+        timestep: int,
         agent: SACLearner,
         env: ContinualWorldEnv,
         loggers: list[Logger],
@@ -32,6 +57,9 @@ def evaluate(
         mode: Literal['all', 'current', 'back'] = 'all',
         num_episodes: int = 15,
 ) -> None:
+    for logger in loggers:
+        logger.set_timestep(timestep)
+
     match mode:
         case 'all':
             env_names = env.tasks

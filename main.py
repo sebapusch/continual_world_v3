@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
+from typing import Literal
 
 import jax.numpy as jnp
 import numpy as np
 
-from common.eval import TerminalLogger, evaluate
-from continualworld import TASK_SEQUENCES, get_cl_env
+from continualworld.interproc.interproc_evaluator import InterProcEvaluator
+from continualworld import TASK_SEQUENCES, get_cl_env, ContinualWorldEnv
+from continualworld.utils.eval import Evaluator, StandardEvaluator
+from continualworld.utils.logger import Logger, TerminalLogger
 from rl.algorithms.sac import SACLearner
 from rl.datasets.replay_buffer import ReplayBuffer
 
@@ -20,6 +24,14 @@ def _should_train(
     return (
         timestep >= training_starts
         and (timestep - training_starts) % gradient_update_interval == 0
+    )
+
+def _should_eval(
+    timestep: int, eval_starts: int, eval_interval: int
+) -> bool:
+    return (
+            timestep >= eval_starts
+            and (timestep - eval_starts) % eval_interval == 0
     )
 
 
@@ -42,13 +54,53 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--actor-lr', type=float, default=1e-3)
     parser.add_argument('--critic-lr', type=float, default=1e-3)
 
+    parser.add_argument('--eval-cpu-frac', type=float, default=None)
+
     return parser.parse_args()
+
+def make_evaluator(
+        env: ContinualWorldEnv,
+        loggers: list[Logger],
+        seed: int,
+        mode: Literal['all', 'current', 'back'] = 'all',
+        eval_cpu_frac: float | None = None,
+        num_episodes: int = 15,
+) -> Evaluator:
+    if eval_cpu_frac is not None:
+        assert 0.0 < eval_cpu_frac < 1.0, "Invalid fraction of CPUs to use for evaluation"
+
+        available_cpus = sorted(os.sched_getaffinity(0))
+
+        n_eval = int(len(available_cpus) * eval_cpu_frac)
+
+        eval_cpus = available_cpus[-n_eval:]
+        train_cpus = available_cpus[:-n_eval]
+
+        print(f'Restricting train loop to {len(train_cpus)} CPUs')
+        os.sched_setaffinity(0, train_cpus)
+
+        return InterProcEvaluator(
+            eval_cpus,
+            env,
+            loggers,
+            seed,
+            mode,
+            num_episodes,
+        )
+
+    return StandardEvaluator(
+        env,
+        loggers,
+        seed,
+        mode,
+        num_episodes,
+    )
 
 
 def main() -> None:
     args = parse_args()
     env = get_cl_env(
-        args.sequence,
+        ['push-v3'],
         args.steps_per_task,
         episode_horizon=args.episode_horizon,
         seed=args.seed,
@@ -77,6 +129,14 @@ def main() -> None:
         env.observation_space,  # type: ignore[arg-type]
         env.action_space,       # type: ignore[arg-type]
         args.buffer_size,
+    )
+
+    evaluator = make_evaluator(
+        env,
+        loggers,
+        args.seed + 42,
+        'current',
+        args.eval_cpu_frac,
     )
 
     try:
@@ -113,9 +173,13 @@ def main() -> None:
                 for _ in range(args.gradient_steps):
                     sac.update(replay_buffer.sample(batch_size=args.batch_size))
 
-            if current_timestep % args.eval_interval == 0 and not env.exhausted:
+            if _should_eval(
+                current_timestep,
+                args.training_starts,
+                args.eval_interval,
+            ) and not env.exhausted:
                 print("evaluating")
-                evaluate(sac, env, loggers, args.seed + 42, "current")
+                evaluator.evaluate(current_timestep, sac)
 
             if done:
                 num_episodes += 1
