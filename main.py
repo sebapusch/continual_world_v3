@@ -34,13 +34,25 @@ def _should_eval(
             and (timestep - eval_starts) % eval_interval == 0
     )
 
+def _get_loggers(args: argparse.Namespace) -> list[Logger]:
+    loggers: list[Logger] = [TerminalLogger()]
+    if args.wandb_project is not None:
+        loggers.append(WandbLogger(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_name,
+            config=vars(args),
+        ))
+
+    return loggers
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a random policy over a Continual World v3 task sequence."
     )
     parser.add_argument("--sequence", choices=TASK_SEQUENCES, default="CW10")
-    parser.add_argument("--steps-per-task", type=int, default=500_000)
+    parser.add_argument("--steps-per-task", type=int, default=1_000_000)
     parser.add_argument("--episode-horizon", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--buffer-size', type=int, default=1_000_000)
@@ -51,8 +63,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--total-timesteps', type=int, default=500_000)
 
-    parser.add_argument('--actor-lr', type=float, default=1e-3)
-    parser.add_argument('--critic-lr', type=float, default=1e-3)
+    parser.add_argument('--actor-lr', type=float, default=3e-4)
+    parser.add_argument('--critic-lr', type=float, default=3e-4)
+    parser.add_argument('--target-entropy', type=float, default=None)
 
     parser.add_argument('--eval-cpu-frac', type=float, default=None)
     parser.add_argument('--wandb-project', type=str, default=None)
@@ -122,24 +135,18 @@ def main() -> None:
         seed=args.seed,
         observations=jnp.array(env.observation_space.sample()[np.newaxis]),
         actions=jnp.array(env.action_space.sample()[np.newaxis]),
-        hidden_dims=[256, 256, 256, 256],
-        tau=0.089,
+        hidden_dims=(256, 256, 256, 256),
+        tau=0.005,
+        target_entropy=-env.action_space.shape[0],
     )
-
-    loggers = [TerminalLogger()]
-    if args.wandb_project is not None:
-        loggers.append(WandbLogger(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name=args.wandb_name,
-            config=vars(args),
-        ))
 
     replay_buffer = ReplayBuffer(
         env.observation_space,  # type: ignore[arg-type]
         env.action_space,       # type: ignore[arg-type]
         args.buffer_size,
     )
+
+    loggers = _get_loggers(args)
 
     evaluator = make_evaluator(
         env,
