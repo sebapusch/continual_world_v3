@@ -7,4 +7,4 @@
 #SBATCH --error=logs/train_cw_%A_%a.err
 
 module load uv
-uv run main.py
+uv run main.py "$@"
