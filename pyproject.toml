@@ -11,7 +11,9 @@ dependencies = [
     "metaworld>=3.1.1",
     # Meta-World imports Gymnasium's MuJoCo renderer, but currently depends on
     # base Gymnasium rather than the `mujoco` extra that supplies this package.
+    "multiprocess>=0.70.19",
     "numpy>=2.5.1",
     "packaging>=23.0",
     "tqdm>=4.70.0",
+    "wandb>=0.21.0",
 ]

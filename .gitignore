@@ -11,3 +11,6 @@ wheels/
 
 # pycharm
 .idea
+
+# other
+wandb
