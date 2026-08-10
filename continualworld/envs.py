@@ -13,7 +13,7 @@ from metaworld.types import Task
 
 from continualworld.tasks import resolve_sequence
 
-META_WORLD_TIME_HORIZON = 200
+META_WORLD_TIME_HORIZON = 500
 
 
 class _SequenceOneHotWrapper(gym.ObservationWrapper):
@@ -164,9 +164,8 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
             ),
             dtype=base_space.dtype,
         )
-        self.test_envs: list[gym.Env] = [
-            self._build_test_env(index) for index in range(self.num_tasks)
-        ]
+        self.test_envs = []
+        self.build_test_envs()
 
     @property
     def current_task_index(self) -> int | None:
@@ -198,6 +197,11 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
     def exhausted(self) -> bool:
         return self._sequence_index >= self.num_tasks
 
+    def build_test_envs(self) -> None:
+        self.test_envs: list[gym.Env] = [
+            self._build_test_env(index) for index in range(self.num_tasks)
+        ]
+
     def _build_active_env(self) -> gym.Env:
         name = self.current_task_name
         index = self.current_task_index
@@ -220,7 +224,7 @@ class ContinualWorldEnv(gym.Env[np.ndarray, np.ndarray]):
         """Build an independently resettable environment for one sequence entry."""
         name = self.tasks[index]
         benchmark = self._benchmarks[name]
-        raw_env = benchmark.train_classes[name](render_mode=self.render_mode)
+        raw_env = benchmark.train_classes[name](render_mode="rgb_array")
         wrapped: gym.Env = _TaskSamplerWrapper(
             raw_env, benchmark.train_tasks, self._test_task_rngs[index]
         )

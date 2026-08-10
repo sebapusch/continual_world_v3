@@ -53,6 +53,8 @@ class ContinualWorldEnvTest(unittest.TestCase):
             self.assertEqual(len(env.test_envs), 2)
             self.assertIs(env.current_test_env, env.test_envs[0])
             self.assertIs(env.test_env, env.test_envs[0])
+            self.assertEqual(env.test_envs[0].unwrapped.render_mode, "rgb_array")
+            self.assertEqual(env.test_envs[1].unwrapped.render_mode, "rgb_array")
 
             train_observation, _ = env.reset(seed=7)
             first_test_observation, _ = env.test_envs[0].reset(seed=7)

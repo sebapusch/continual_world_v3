@@ -1,5 +1,3 @@
-"""Minimal random-policy example for the Continual World v3 sequence."""
-
 from __future__ import annotations
 
 import argparse
@@ -9,6 +7,7 @@ from typing import Literal
 import jax.numpy as jnp
 import numpy as np
 
+from continualworld.envs import META_WORLD_TIME_HORIZON
 from continualworld.interproc.interproc_evaluator import InterProcEvaluator
 from continualworld import TASK_SEQUENCES, get_cl_env, ContinualWorldEnv
 from continualworld.utils.eval import Evaluator, StandardEvaluator
@@ -30,8 +29,8 @@ def _should_eval(
     timestep: int, eval_starts: int, eval_interval: int
 ) -> bool:
     return (
-            timestep >= eval_starts
-            and (timestep - eval_starts) % eval_interval == 0
+        timestep >= eval_starts
+        and (timestep - eval_starts) % eval_interval == 0
     )
 
 def _get_loggers(args: argparse.Namespace) -> list[Logger]:
@@ -48,23 +47,24 @@ def _get_loggers(args: argparse.Namespace) -> list[Logger]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run a random policy over a Continual World v3 task sequence."
-    )
+    parser = argparse.ArgumentParser()
+
     parser.add_argument("--sequence", choices=TASK_SEQUENCES, default="CW10")
     parser.add_argument("--steps-per-task", type=int, default=1_000_000)
-    parser.add_argument("--episode-horizon", type=int, default=200)
+    parser.add_argument("--episode-horizon", type=int, default=META_WORLD_TIME_HORIZON)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument('--buffer-size', type=int, default=1_000_000)
-    parser.add_argument('--training-starts', type=int, default=10_000)
+    parser.add_argument('--training-starts', type=int, default=4_000)
     parser.add_argument('--gradient-update-interval', type=int, default=1000)
     parser.add_argument('--eval-interval', type=int, default=10_000)
     parser.add_argument('--gradient-steps', type=int, default=1000)
-    parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--total-timesteps', type=int, default=500_000)
+    parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--total-timesteps', type=int, default=1_000_000)
+    parser.add_argument('--max-grad-norm', type=int, default=1.0)
 
     parser.add_argument('--actor-lr', type=float, default=3e-4)
     parser.add_argument('--critic-lr', type=float, default=3e-4)
+    parser.add_argument('--temp-lr', type=float, default=3e-4)
     parser.add_argument('--target-entropy', type=float, default=None)
 
     parser.add_argument('--eval-cpu-frac', type=float, default=None)
@@ -73,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--wandb-name', type=str, default=None)
 
     return parser.parse_args()
+
 
 def make_evaluator(
         env: ContinualWorldEnv,
@@ -102,6 +103,7 @@ def make_evaluator(
             seed,
             mode,
             num_episodes,
+            True,
         )
 
     return StandardEvaluator(
@@ -120,6 +122,7 @@ def main() -> None:
         args.steps_per_task,
         episode_horizon=args.episode_horizon,
         seed=args.seed,
+        render_mode='rgb_array',
     )
     env.action_space.seed(args.seed)
     env.observation_space.seed(args.seed)
@@ -132,12 +135,14 @@ def main() -> None:
     sac = SACLearner(
         actor_lr=args.actor_lr,
         critic_lr=args.critic_lr,
+        temp_lr=args.temp_lr,
         seed=args.seed,
         observations=jnp.array(env.observation_space.sample()[np.newaxis]),
         actions=jnp.array(env.action_space.sample()[np.newaxis]),
-        hidden_dims=(256, 256, 256, 256),
+        hidden_dims=(400, 400, 400),
         tau=0.005,
-        target_entropy=-env.action_space.shape[0],
+        target_entropy=-np.prod(env.action_space.shape[0]).item(),
+        max_grad_norm=args.max_grad_norm,
     )
 
     replay_buffer = ReplayBuffer(
