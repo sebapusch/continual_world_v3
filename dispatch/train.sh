@@ -6,5 +6,6 @@
 #SBATCH --output=logs/train_cw_%A_%a.out
 #SBATCH --error=logs/train_cw_%A_%a.err
 
+export MUJOCO_GL="egl"
 module load uv
 uv run main.py "$@"
